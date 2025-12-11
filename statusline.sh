@@ -127,19 +127,41 @@ fi
 # Tokens from transcript (context usage)
 tokens=""
 if [ -f "$transcript" ]; then
-    last_usage=$(grep "cache_read_input_tokens" "$transcript" 2>/dev/null | tail -1)
+    # Total context = input_tokens + cache_read + cache_creation
+    last_usage=$(grep '"input_tokens"' "$transcript" 2>/dev/null | tail -1)
     if [ -n "$last_usage" ]; then
-        ctx_tokens=$(echo "$last_usage" | jq -r '.message.usage.cache_read_input_tokens // .usage.cache_read_input_tokens // 0' 2>/dev/null)
+        input_t=$(echo "$last_usage" | jq -r '.message.usage.input_tokens // .usage.input_tokens // 0' 2>/dev/null)
+        cache_read=$(echo "$last_usage" | jq -r '.message.usage.cache_read_input_tokens // .usage.cache_read_input_tokens // 0' 2>/dev/null)
+        cache_create=$(echo "$last_usage" | jq -r '.message.usage.cache_creation_input_tokens // .usage.cache_creation_input_tokens // 0' 2>/dev/null)
+        [ "$input_t" = "null" ] && input_t=0
+        [ "$cache_read" = "null" ] && cache_read=0
+        [ "$cache_create" = "null" ] && cache_create=0
+        ctx_tokens=$((input_t + cache_read + cache_create))
         if [ -n "$ctx_tokens" ] && [ "$ctx_tokens" != "null" ] && [ "$ctx_tokens" != "0" ]; then
             # Format: 44236 -> 44.2k
             if [ "$ctx_tokens" -ge 1000 ]; then
-                tokens=$(echo "scale=1; $ctx_tokens / 1000" | bc)k
+                tokens_fmt=$(echo "scale=1; $ctx_tokens / 1000" | bc)k
             else
-                tokens=$ctx_tokens
+                tokens_fmt=$ctx_tokens
             fi
             # Percentage of 200k context
             pct=$(echo "scale=0; $ctx_tokens * 100 / 200000" | bc)
-            tokens="${tokens} (${pct}%)"
+
+            # Color based on token count:
+            # < 35k gray, < 100k white, < 150k yellow, < 170k orange, >= 170k red
+            if [ "$ctx_tokens" -lt 35000 ]; then
+                token_color="\033[90m"  # gray
+            elif [ "$ctx_tokens" -lt 100000 ]; then
+                token_color="\033[97m"  # white
+            elif [ "$ctx_tokens" -lt 150000 ]; then
+                token_color="\033[33m"  # yellow
+            elif [ "$ctx_tokens" -lt 170000 ]; then
+                token_color="\033[38;5;208m"  # orange
+            else
+                token_color="\033[31m"  # red
+            fi
+
+            tokens="${token_color}${tokens_fmt} (${pct}%)\033[0m"
         fi
     fi
 fi
