@@ -14,7 +14,7 @@ A bash script for creating an informative status line in Claude Code. Sections a
 | ✓/✗ Git | Branch, status, changes (+/-) |
 | 💰 Cost | Session cost in USD |
 | ⏱ Time | Session duration |
-| 🧠 Tokens | Context usage (tokens and %) |
+| 🧠/📜 Tokens | Context usage (tokens and %). 🧠 = new API, 📜 = transcript fallback |
 
 ## Example Output
 

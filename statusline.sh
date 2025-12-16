@@ -125,10 +125,21 @@ if [ -d "$dir/.git" ]; then
     fi
 fi
 
-# Tokens from transcript (context usage)
+# Context usage tokens
 tokens=""
-if [ -f "$transcript" ]; then
-    # Total context = input_tokens + cache_read + cache_creation
+ctx_tokens=0
+token_icon="🧠"  # new API
+
+# Try new API first: context_window.current_usage
+current_usage=$(echo "$input" | jq '.context_window.current_usage')
+if [ "$current_usage" != "null" ]; then
+    # New API available - use it directly
+    ctx_tokens=$(echo "$current_usage" | jq '.input_tokens + .cache_creation_input_tokens + .cache_read_input_tokens')
+fi
+
+# Fallback to transcript if new API returned null or 0
+if [ "$ctx_tokens" -eq 0 ] && [ -f "$transcript" ]; then
+    token_icon="📜"  # fallback to transcript
     last_usage=$(grep '"input_tokens"' "$transcript" 2>/dev/null | tail -1)
     if [ -n "$last_usage" ]; then
         input_t=$(echo "$last_usage" | jq -r '.message.usage.input_tokens // .usage.input_tokens // 0' 2>/dev/null)
@@ -138,33 +149,35 @@ if [ -f "$transcript" ]; then
         [ "$cache_read" = "null" ] && cache_read=0
         [ "$cache_create" = "null" ] && cache_create=0
         ctx_tokens=$((input_t + cache_read + cache_create))
-        if [ -n "$ctx_tokens" ] && [ "$ctx_tokens" != "null" ] && [ "$ctx_tokens" != "0" ]; then
-            # Format: 44236 -> 44.2k
-            if [ "$ctx_tokens" -ge 1000 ]; then
-                tokens_fmt=$(echo "scale=1; $ctx_tokens / 1000" | bc)k
-            else
-                tokens_fmt=$ctx_tokens
-            fi
-            # Percentage of context window
-            pct=$(echo "scale=0; $ctx_tokens * 100 / $context_size" | bc)
-
-            # Color based on context usage percentage:
-            # < 20% gray, < 50% white, < 75% yellow, < 85% orange, >= 85% red
-            if [ "$pct" -lt 20 ]; then
-                token_color="\033[90m"  # gray
-            elif [ "$pct" -lt 50 ]; then
-                token_color="\033[97m"  # white
-            elif [ "$pct" -lt 75 ]; then
-                token_color="\033[33m"  # yellow
-            elif [ "$pct" -lt 85 ]; then
-                token_color="\033[38;5;208m"  # orange
-            else
-                token_color="\033[31m"  # red
-            fi
-
-            tokens="${token_color}${tokens_fmt} (${pct}%)\033[0m"
-        fi
     fi
+fi
+
+# Format and color tokens if we have data
+if [ "$ctx_tokens" -gt 0 ]; then
+    # Format: 44236 -> 44.2k
+    if [ "$ctx_tokens" -ge 1000 ]; then
+        tokens_fmt=$(echo "scale=1; $ctx_tokens / 1000" | bc)k
+    else
+        tokens_fmt=$ctx_tokens
+    fi
+    # Percentage of context window
+    pct=$((ctx_tokens * 100 / context_size))
+
+    # Color based on context usage percentage:
+    # < 20% gray, < 50% white, < 75% yellow, < 85% orange, >= 85% red
+    if [ "$pct" -lt 20 ]; then
+        token_color="\033[90m"  # gray
+    elif [ "$pct" -lt 50 ]; then
+        token_color="\033[97m"  # white
+    elif [ "$pct" -lt 75 ]; then
+        token_color="\033[33m"  # yellow
+    elif [ "$pct" -lt 85 ]; then
+        token_color="\033[38;5;208m"  # orange
+    else
+        token_color="\033[31m"  # red
+    fi
+
+    tokens="${token_color}${tokens_fmt} (${pct}%)\033[0m"
 fi
 
 # Build output dynamically - only add sections with data
@@ -212,7 +225,7 @@ fi
 
 # Tokens - only if calculated
 if [ -n "$tokens" ]; then
-    sections+=("🧠 $tokens")
+    sections+=("$token_icon $tokens")
 fi
 
 # Join sections with " | "
