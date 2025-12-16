@@ -17,6 +17,7 @@ model=$(echo "$input" | jq -r '.model.display_name // .model.id // "unknown"')
 cost=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
 duration_ms=$(echo "$input" | jq -r '.cost.total_duration_ms // 0')
 transcript=$(echo "$input" | jq -r '.transcript_path // ""')
+context_size=$(echo "$input" | jq -r '.context_window.context_window_size // 200000')
 
 # Format path: /Users/username/repos/... -> ~/repos/... with colored current dir
 path_with_home=$(echo "$dir" | sed "s|^$HOME|~|")
@@ -144,18 +145,18 @@ if [ -f "$transcript" ]; then
             else
                 tokens_fmt=$ctx_tokens
             fi
-            # Percentage of 200k context
-            pct=$(echo "scale=0; $ctx_tokens * 100 / 200000" | bc)
+            # Percentage of context window
+            pct=$(echo "scale=0; $ctx_tokens * 100 / $context_size" | bc)
 
-            # Color based on token count:
-            # < 35k gray, < 100k white, < 150k yellow, < 170k orange, >= 170k red
-            if [ "$ctx_tokens" -lt 35000 ]; then
+            # Color based on context usage percentage:
+            # < 20% gray, < 50% white, < 75% yellow, < 85% orange, >= 85% red
+            if [ "$pct" -lt 20 ]; then
                 token_color="\033[90m"  # gray
-            elif [ "$ctx_tokens" -lt 100000 ]; then
+            elif [ "$pct" -lt 50 ]; then
                 token_color="\033[97m"  # white
-            elif [ "$ctx_tokens" -lt 150000 ]; then
+            elif [ "$pct" -lt 75 ]; then
                 token_color="\033[33m"  # yellow
-            elif [ "$ctx_tokens" -lt 170000 ]; then
+            elif [ "$pct" -lt 85 ]; then
                 token_color="\033[38;5;208m"  # orange
             else
                 token_color="\033[31m"  # red
