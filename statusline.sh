@@ -213,8 +213,8 @@ if [ -n "$git_block" ]; then
     sections+=("$(printf '%b' "$git_block")")
 fi
 
-# Cost - only if > 0
-if [ "$(echo "$cost > 0" | bc)" -eq 1 ]; then
+# Cost - only if > 0 and not hidden by env var
+if [ -z "$CLAUDE_STATUSLINE_HIDE_COST" ] && [ "$(echo "$cost > 0" | bc)" -eq 1 ]; then
     sections+=("💰 \$$(printf '%.2f' "$cost")")
 fi
 

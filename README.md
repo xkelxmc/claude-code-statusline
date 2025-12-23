@@ -44,6 +44,18 @@ Opus 4.5 | 📁 ~/obsidian/vault | 📔 127 notes / 7 tpl | 💰 $0.50 | ⏱ 3m
    ```
 4. Restart Claude Code
 
+## Configuration
+
+### Hide Cost (for Max plan users)
+
+If you're on Claude Max plan and don't want to see the cost section, add this to your `~/.bashrc` or `~/.zshrc`:
+
+```bash
+export CLAUDE_STATUSLINE_HIDE_COST=1
+```
+
+Then restart your terminal or run `source ~/.zshrc`.
+
 ## Dependencies
 
 - `jq` — for JSON parsing (install via `brew install jq` or `apt install jq`)
