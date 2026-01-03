@@ -98,13 +98,20 @@ if [ -d "$dir/.git" ]; then
             [ -n "$del" ] && deletions=$((deletions + del))
         fi
 
-        # Lines in untracked files
+        # Lines in untracked files and directories
         untracked=$(git status --porcelain 2>/dev/null | grep '^??' | cut -c4-)
         if [ -n "$untracked" ]; then
             for f in $untracked; do
                 if [ -f "$f" ]; then
                     lines=$(wc -l < "$f" 2>/dev/null | tr -d ' ')
                     [ -n "$lines" ] && insertions=$((insertions + lines))
+                elif [ -d "$f" ]; then
+                    # Recursively count lines in all files in untracked directory
+                    dir_lines=$(find "$f" -type f -exec cat {} + 2>/dev/null | wc -l | tr -d ' ')
+                    [ -n "$dir_lines" ] && insertions=$((insertions + dir_lines))
+                    # Count files in directory and adjust file count (dir counts as 1, but has N files)
+                    dir_files=$(find "$f" -type f 2>/dev/null | wc -l | tr -d ' ')
+                    [ -n "$dir_files" ] && changed_files=$((changed_files + dir_files - 1))
                 fi
             done
         fi
