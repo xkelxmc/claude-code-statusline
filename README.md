@@ -7,7 +7,7 @@ A 3-line bash status line for Claude Code with dynamic sections — if there's n
 ```
 Line 1: 📁 ~/repos/project | ⬢ v22.0.0 | 📦 bun | ✓ main | 📔 42 notes
 Line 2: 🤖 Opus 4.5 | 🔑 7a020cd0-edd7-4094-9e6c-0b2a5a233beb | 📝 +45 -12
-Line 3: 🧠 36% ▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ | 💰 $1.20 | ⏱ 12m (4m api)
+Line 3: 🧠 36% ▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ | 💰 $1.20 | ⏱ 12m (4m api) | 📊 25k tpm | ⏳ 2h 15m → 01:00
 ```
 
 ### Line 1: Environment
@@ -32,6 +32,8 @@ Line 3: 🧠 36% ▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ | 
 | 🧠 Context | Usage % with colored progress bar |
 | 💰 Cost | Session cost in USD |
 | ⏱ Time | Total duration (API time) |
+| 📊 TPM | Tokens per minute (session average) |
+| ⏳ Reset | Time until subscription reset (via ccusage) |
 
 ## Features
 
@@ -39,6 +41,8 @@ Line 3: 🧠 36% ▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ | 
 - **Git uses `project_dir`** — works correctly when navigating subdirectories
 - **API time tracking** — shows both total and pure API duration
 - **Claude's contributions** — tracks lines added/removed by Claude
+- **TPM (tokens per minute)** — calculated from session data
+- **Subscription reset countdown** — async integration with ccusage (non-blocking, cached)
 
 ## Installation
 
@@ -72,6 +76,7 @@ Add to `~/.bashrc` or `~/.zshrc`, then restart terminal.
 
 - `jq` — for JSON parsing (`brew install jq` or `apt install jq`)
 - `bc` — for calculations (usually pre-installed)
+- `ccusage` (optional) — for reset time tracking (`npm install -g ccusage` or auto-fetched via `npx`)
 
 ## License
 

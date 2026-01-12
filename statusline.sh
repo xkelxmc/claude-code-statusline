@@ -31,6 +31,17 @@ else
     ctx_tokens=0
 fi
 
+# Total tokens (for TPM calculation)
+total_input_tokens=$(echo "$input" | jq -r '.context_window.total_input_tokens // 0')
+total_output_tokens=$(echo "$input" | jq -r '.context_window.total_output_tokens // 0')
+tot_tokens=$((total_input_tokens + total_output_tokens))
+
+# TPM (tokens per minute) from native data
+tpm=""
+if [ "$tot_tokens" -gt 0 ] && [ "$duration_ms" -gt 0 ]; then
+    tpm=$(echo "$tot_tokens $duration_ms" | awk '{printf "%.0f", $1 * 60000 / $2}')
+fi
+
 # ============================================================================
 # FORMAT HELPERS
 # ============================================================================
@@ -86,6 +97,78 @@ progress_bar() {
 
     echo "$bar"
 }
+
+# ============================================================================
+# CCUSAGE ASYNC CACHE (for reset time)
+# ============================================================================
+
+CCUSAGE_CACHE="/tmp/ccusage_statusline_cache.json"
+CCUSAGE_LOCK="/tmp/ccusage_statusline.lock"
+CCUSAGE_CACHE_TTL=30  # seconds
+
+reset_time=""
+reset_remaining=""
+
+# Check if ccusage is available
+if command -v ccusage >/dev/null 2>&1 || command -v npx >/dev/null 2>&1; then
+    now=$(date +%s)
+    cache_valid=0
+
+    # Check if cache exists and is fresh
+    if [ -f "$CCUSAGE_CACHE" ]; then
+        cache_mtime=$(stat -f %m "$CCUSAGE_CACHE" 2>/dev/null || stat -c %Y "$CCUSAGE_CACHE" 2>/dev/null)
+        cache_age=$((now - cache_mtime))
+        if [ "$cache_age" -lt "$CCUSAGE_CACHE_TTL" ]; then
+            cache_valid=1
+        fi
+    fi
+
+    # If cache is stale, trigger async update (non-blocking)
+    if [ "$cache_valid" -eq 0 ]; then
+        # Use lock to prevent multiple concurrent updates
+        if mkdir "$CCUSAGE_LOCK" 2>/dev/null; then
+            (
+                # Run ccusage in background
+                if command -v ccusage >/dev/null 2>&1; then
+                    ccusage blocks --json 2>/dev/null > "$CCUSAGE_CACHE.tmp" && mv "$CCUSAGE_CACHE.tmp" "$CCUSAGE_CACHE"
+                else
+                    npx -y ccusage@latest blocks --json 2>/dev/null > "$CCUSAGE_CACHE.tmp" && mv "$CCUSAGE_CACHE.tmp" "$CCUSAGE_CACHE"
+                fi
+                rmdir "$CCUSAGE_LOCK" 2>/dev/null
+            ) &
+        fi
+    fi
+
+    # Read from cache (even if stale - better than nothing)
+    if [ -f "$CCUSAGE_CACHE" ]; then
+        active_block=$(jq -c '.blocks[] | select(.isActive == true)' "$CCUSAGE_CACHE" 2>/dev/null | head -n1)
+        if [ -n "$active_block" ]; then
+            end_time=$(echo "$active_block" | jq -r '.endTime // empty')
+            remaining_min=$(echo "$active_block" | jq -r '.projection.remainingMinutes // empty')
+
+            if [ -n "$end_time" ]; then
+                # Format reset time as HH:MM (local timezone)
+                if date -r 0 +%s >/dev/null 2>&1; then
+                    # BSD date (macOS) - convert ISO to epoch, then to local time
+                    end_epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "${end_time%%.*}" +%s 2>/dev/null)
+                    reset_time=$(date -r "$end_epoch" +"%H:%M" 2>/dev/null)
+                else
+                    # GNU date (Linux) - handles ISO format with timezone
+                    reset_time=$(date -d "$end_time" +"%H:%M" 2>/dev/null)
+                fi
+            fi
+
+            if [ -n "$remaining_min" ] && [ "$remaining_min" != "null" ]; then
+                remaining_min=${remaining_min%.*}  # Remove decimal
+                if [ "$remaining_min" -ge 60 ]; then
+                    reset_remaining="$((remaining_min / 60))h $((remaining_min % 60))m"
+                else
+                    reset_remaining="${remaining_min}m"
+                fi
+            fi
+        fi
+    fi
+fi
 
 # ============================================================================
 # LINE 1: Location & Environment - path, node, pkg, git, obsidian
@@ -248,6 +331,24 @@ if [ "$duration_sec" -gt 0 ]; then
     time_total=$(format_duration "$duration_ms")
     time_api=$(format_duration "$api_duration_ms")
     line3_parts+=("⏱ ${time_total} (${time_api} api)")
+fi
+
+# TPM (tokens per minute)
+if [ -n "$tpm" ] && [ "$tpm" -gt 0 ] 2>/dev/null; then
+    # Format: 28000 -> 28k tpm
+    if [ "$tpm" -ge 1000 ]; then
+        tpm_fmt=$(echo "scale=1; $tpm / 1000" | bc)k
+    else
+        tpm_fmt=$tpm
+    fi
+    line3_parts+=("📊 ${tpm_fmt} tpm")
+fi
+
+# Reset time (from ccusage cache)
+if [ -n "$reset_remaining" ] && [ -n "$reset_time" ]; then
+    line3_parts+=("⏳ ${reset_remaining} → ${reset_time}")
+elif [ -n "$reset_remaining" ]; then
+    line3_parts+=("⏳ ${reset_remaining}")
 fi
 
 # Join line3 parts
