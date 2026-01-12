@@ -1,30 +1,44 @@
 # Claude Code Custom Status Line
 
-A bash script for creating an informative status line in Claude Code. Sections are rendered dynamically — if there's no data, the block is hidden.
+A 3-line bash status line for Claude Code with dynamic sections — if there's no data, the block is hidden.
 
-## What's Displayed
+## Layout
 
+```
+Line 1: 📁 ~/repos/project | ⬢ v22.0.0 | 📦 bun | ✓ main | 📔 42 notes
+Line 2: 🤖 Opus 4.5 | 🔑 7a020cd0-edd7-4094-9e6c-0b2a5a233beb | 📝 +45 -12
+Line 3: 🧠 36% ▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ | 💰 $1.20 | ⏱ 12m (4m api)
+```
+
+### Line 1: Environment
 | Section | Description |
 |---------|-------------|
-| Model | Current model name (Opus 4.5, Sonnet, etc.) |
-| 📁 Path | Current directory path |
-| 📔 Notes | Note and template count (Obsidian vaults only) |
-| ⬢ Node | Node.js version (if installed) |
+| 📁 Path | Current directory (gray parent / white current) |
+| ⬢ Node | Node.js version |
 | 📦 Package | Package manager (npm/yarn/pnpm/bun) |
-| ✓/✗ Git | Branch, status, changes (+/-) |
+| ✓/✗ Git | Branch, file count, insertions/deletions |
+| 📔 Notes | Note count (Obsidian vaults only) |
+
+### Line 2: Session
+| Section | Description |
+|---------|-------------|
+| 🤖 Model | Current model (Opus 4.5, Sonnet, etc.) |
+| 🔑 Session | Full session ID |
+| 📝 Lines | Lines added/removed by Claude this session |
+
+### Line 3: Metrics
+| Section | Description |
+|---------|-------------|
+| 🧠 Context | Usage % with colored progress bar |
 | 💰 Cost | Session cost in USD |
-| ⏱ Time | Session duration |
-| 🧠/📜 Tokens | Context usage (tokens and %). 🧠 = new API, 📜 = transcript fallback |
+| ⏱ Time | Total duration (API time) |
 
-## Example Output
+## Features
 
-```
-Opus 4.5 | 📁 ~/projects/myapp | ⬢ v20.10.0 | 📦 pnpm | ✗ main 3/+45-12 | 💰 $1.25 | ⏱ 8m | 🧠 44.2k (22%)
-```
-
-```
-Opus 4.5 | 📁 ~/obsidian/vault | 📔 127 notes / 7 tpl | 💰 $0.50 | ⏱ 3m
-```
+- **Colored progress bar** for context usage (gray → white → yellow → orange → red)
+- **Git uses `project_dir`** — works correctly when navigating subdirectories
+- **API time tracking** — shows both total and pure API duration
+- **Claude's contributions** — tracks lines added/removed by Claude
 
 ## Installation
 
@@ -48,17 +62,15 @@ Opus 4.5 | 📁 ~/obsidian/vault | 📔 127 notes / 7 tpl | 💰 $0.50 | ⏱ 3m
 
 ### Hide Cost (for Max plan users)
 
-If you're on Claude Max plan and don't want to see the cost section, add this to your `~/.bashrc` or `~/.zshrc`:
-
 ```bash
 export CLAUDE_STATUSLINE_HIDE_COST=1
 ```
 
-Then restart your terminal or run `source ~/.zshrc`.
+Add to `~/.bashrc` or `~/.zshrc`, then restart terminal.
 
 ## Dependencies
 
-- `jq` — for JSON parsing (install via `brew install jq` or `apt install jq`)
+- `jq` — for JSON parsing (`brew install jq` or `apt install jq`)
 - `bc` — for calculations (usually pre-installed)
 
 ## License
