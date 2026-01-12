@@ -193,6 +193,16 @@ sections=()
 # Always show model
 sections+=("$model")
 
+# Session ID - from TTY-based file (first 4..last 4)
+if [ -n "$GPG_TTY" ]; then
+    tty_id=$(echo "$GPG_TTY" | sed 's|/|-|g')
+    session_id=$(cat ~/.claude/sessions/${tty_id}.id 2>/dev/null)
+    if [ -n "$session_id" ]; then
+        sid_short="${session_id:0:4}..${session_id: -4}"
+        sections+=("\033[90m${sid_short}\033[0m")
+    fi
+fi
+
 # Always show path
 sections+=("📁 $(printf '%b' "$short_path")")
 
