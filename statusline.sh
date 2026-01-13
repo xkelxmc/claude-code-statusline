@@ -305,9 +305,9 @@ done
 line3_parts=()
 
 # Context with progress bar
-if [ "$ctx_tokens" -gt 0 ]; then
-    pct=$((ctx_tokens * 100 / context_size))
-    bar=$(progress_bar "$pct" 20)
+used_pct=$(echo "$input" | jq -r '.context_window.used_percentage // 0')
+if [ "$used_pct" -gt 0 ]; then
+    bar=$(progress_bar "$used_pct" 20)
 
     # Format tokens: 44236 -> 44.2k
     if [ "$ctx_tokens" -ge 1000 ]; then
@@ -317,7 +317,7 @@ if [ "$ctx_tokens" -gt 0 ]; then
     fi
 
     # Use same color for percentage as progress bar
-    line3_parts+=("🧠 ${bar_color}${pct}%\033[0m $(printf '%b' "$bar")")
+    line3_parts+=("🧠 ${bar_color}${used_pct}%\033[0m $(printf '%b' "$bar") ${bar_color}${tokens_fmt}\033[0m")
 fi
 
 # Cost
