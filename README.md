@@ -7,7 +7,7 @@ A 3-line bash status line for Claude Code with dynamic sections — if there's n
 ```
 Line 1: 📁 ~/repos/project | ⬢ v22.0.0 | 📦 bun | ✓ main | 📔 42 notes
 Line 2: 🤖 Opus 4.5 | 🔑 7a020cd0-edd7-4094-9e6c-0b2a5a233beb | 📝 +45 -12
-Line 3: 🧠 36% ▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ | 💰 $1.20 | ⏱ 12m (4m api) | 📊 25k tpm | ⏳ 2h 15m → 01:00
+Line 3: 🧠 36% ▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ 72.4k | 💰 $1.20 | ⏱ 12m (4m api) | 📊 25k tpm | ⏳ 2h 15m → 01:00
 ```
 
 ### Line 1: Environment
@@ -29,7 +29,7 @@ Line 3: 🧠 36% ▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ | 
 ### Line 3: Metrics
 | Section | Description |
 |---------|-------------|
-| 🧠 Context | Usage % with colored progress bar |
+| 🧠 Context | Usage %, colored progress bar, token count |
 | 💰 Cost | Session cost in USD |
 | ⏱ Time | Total duration (API time) |
 | 📊 TPM | Tokens per minute (session average) |
