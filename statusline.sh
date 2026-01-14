@@ -225,10 +225,10 @@ if [ -d "$project_dir/.git" ] && cd "$project_dir" 2>/dev/null; then
             [ -n "$del" ] && deletions=$((deletions + del))
         fi
 
-        # Lines in untracked files
+        # Lines in untracked files (skip binaries with grep -I)
         untracked_files=$(git ls-files --others --exclude-standard 2>/dev/null)
         if [ -n "$untracked_files" ]; then
-            untracked_lines=$(echo "$untracked_files" | tr '\n' '\0' | xargs -0 cat 2>/dev/null | wc -l | tr -d ' ')
+            untracked_lines=$(echo "$untracked_files" | tr '\n' '\0' | xargs -0 grep -chI '' 2>/dev/null | awk '{s+=$1} END {print s+0}')
             [ -n "$untracked_lines" ] && insertions=$((insertions + untracked_lines))
 
             untracked_count=$(echo "$untracked_files" | wc -l | tr -d ' ')
