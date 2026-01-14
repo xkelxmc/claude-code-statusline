@@ -125,6 +125,12 @@ if command -v ccusage >/dev/null 2>&1 || command -v npx >/dev/null 2>&1; then
 
     # If cache is stale, trigger async update (non-blocking)
     if [ "$cache_valid" -eq 0 ]; then
+        # Clean up stale lock (older than 2 minutes)
+        if [ -d "$CCUSAGE_LOCK" ]; then
+            lock_mtime=$(stat -f %m "$CCUSAGE_LOCK" 2>/dev/null || stat -c %Y "$CCUSAGE_LOCK" 2>/dev/null)
+            lock_age=$((now - lock_mtime))
+            [ "$lock_age" -gt 120 ] && rmdir "$CCUSAGE_LOCK" 2>/dev/null
+        fi
         # Use lock to prevent multiple concurrent updates
         if mkdir "$CCUSAGE_LOCK" 2>/dev/null; then
             (
@@ -151,10 +157,16 @@ if command -v ccusage >/dev/null 2>&1 || command -v npx >/dev/null 2>&1; then
                 if date -r 0 +%s >/dev/null 2>&1; then
                     # BSD date (macOS) - convert ISO to epoch, then to local time
                     end_epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "${end_time%%.*}" +%s 2>/dev/null)
-                    reset_time=$(date -r "$end_epoch" +"%H:%M" 2>/dev/null)
+                    # Only show reset_time if it's in the future
+                    if [ -n "$end_epoch" ] && [ "$end_epoch" -gt "$now" ]; then
+                        reset_time=$(date -r "$end_epoch" +"%H:%M" 2>/dev/null)
+                    fi
                 else
                     # GNU date (Linux) - handles ISO format with timezone
-                    reset_time=$(date -d "$end_time" +"%H:%M" 2>/dev/null)
+                    end_epoch=$(date -d "$end_time" +%s 2>/dev/null)
+                    if [ -n "$end_epoch" ] && [ "$end_epoch" -gt "$now" ]; then
+                        reset_time=$(date -d "$end_time" +"%H:%M" 2>/dev/null)
+                    fi
                 fi
             fi
 
