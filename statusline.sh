@@ -317,7 +317,9 @@ done
 line3_parts=()
 
 # Context with progress bar
-used_pct=$(echo "$input" | jq -r '.context_window.used_percentage // 0')
+used_pct_raw=$(echo "$input" | jq -r '.context_window.used_percentage // 0')
+used_pct=${used_pct_raw%.*}  # Truncate to integer
+[ -z "$used_pct" ] && used_pct=0
 if [ "$used_pct" -gt 0 ]; then
     bar=$(progress_bar "$used_pct" 20)
 
