@@ -3,6 +3,7 @@
 # Claude Code Custom Status Line (v2 - 3 lines)
 # https://github.com/anthropics/claude-code
 
+set -f
 input=$(cat)
 
 # ============================================================================
@@ -67,16 +68,13 @@ format_duration() {
     fi
 }
 
-# Progress bar with color based on percentage
-# Usage: progress_bar <used_pct> <width>
-# Returns: colored bar AND sets $bar_color for use with percentage text
+# Context progress bar (▰▱ style)
 progress_bar() {
     local pct=$1
     local width=${2:-20}
     local filled=$((pct * width / 100))
     local empty=$((width - filled))
 
-    # Color based on usage: < 20% gray, < 50% white, < 75% yellow, < 85% orange, >= 85% red
     if [ "$pct" -lt 20 ]; then
         bar_color="\033[90m"  # gray
     elif [ "$pct" -lt 50 ]; then
@@ -98,88 +96,210 @@ progress_bar() {
     echo "$bar"
 }
 
+# Usage color by percentage (green -> orange -> yellow -> red)
+usage_color() {
+    local pct=$1
+    if [ "$pct" -ge 90 ]; then echo "\033[38;2;255;85;85m"
+    elif [ "$pct" -ge 70 ]; then echo "\033[38;2;230;200;0m"
+    elif [ "$pct" -ge 50 ]; then echo "\033[38;2;255;176;85m"
+    else echo "\033[38;2;0;175;80m"
+    fi
+}
+
+# Usage bar (●○ style)
+usage_bar() {
+    local pct=$1
+    local width=$2
+    [ "$pct" -lt 0 ] 2>/dev/null && pct=0
+    [ "$pct" -gt 100 ] 2>/dev/null && pct=100
+
+    local filled=$(( pct * width / 100 ))
+    local empty=$(( width - filled ))
+    local ucolor
+    ucolor=$(usage_color "$pct")
+
+    local filled_str="" empty_str=""
+    for ((i=0; i<filled; i++)); do filled_str+="●"; done
+    for ((i=0; i<empty; i++)); do empty_str+="○"; done
+
+    echo "${ucolor}${filled_str}\033[2m${empty_str}\033[0m"
+}
+
+# Convert ISO timestamp to epoch
+iso_to_epoch() {
+    local iso_str="$1"
+    local epoch
+
+    # Try GNU date first
+    epoch=$(date -d "${iso_str}" +%s 2>/dev/null)
+    if [ -n "$epoch" ]; then
+        echo "$epoch"
+        return 0
+    fi
+
+    # BSD date (macOS)
+    local stripped="${iso_str%%.*}"
+    stripped="${stripped%%Z}"
+    stripped="${stripped%%+*}"
+    stripped="${stripped%%-[0-9][0-9]:[0-9][0-9]}"
+
+    if [[ "$iso_str" == *"Z"* ]] || [[ "$iso_str" == *"+00:00"* ]] || [[ "$iso_str" == *"-00:00"* ]]; then
+        epoch=$(env TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "$stripped" +%s 2>/dev/null)
+    else
+        epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$stripped" +%s 2>/dev/null)
+    fi
+
+    [ -n "$epoch" ] && echo "$epoch"
+}
+
+# Format reset time from ISO
+format_reset_time() {
+    local iso_str="$1"
+    local style="$2"
+    [ -z "$iso_str" ] || [ "$iso_str" = "null" ] && return
+
+    local epoch
+    epoch=$(iso_to_epoch "$iso_str")
+    [ -z "$epoch" ] && return
+
+    case "$style" in
+        time)
+            date -j -r "$epoch" +"%H:%M" 2>/dev/null || \
+            date -d "@$epoch" +"%H:%M" 2>/dev/null
+            ;;
+        datetime)
+            date -j -r "$epoch" +"%b %-d, %H:%M" 2>/dev/null | sed 's/  / /g' | tr '[:upper:]' '[:lower:]' || \
+            date -d "@$epoch" +"%b %-d, %H:%M" 2>/dev/null | tr '[:upper:]' '[:lower:]'
+            ;;
+    esac
+}
+
 # ============================================================================
-# CCUSAGE ASYNC CACHE (for reset time)
+# OAUTH TOKEN & USAGE API (cached)
 # ============================================================================
 
-CCUSAGE_CACHE="/tmp/ccusage_statusline_cache.json"
-CCUSAGE_LOCK="/tmp/ccusage_statusline.lock"
-CCUSAGE_CACHE_TTL=30  # seconds
+get_oauth_token() {
+    if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+        echo "$CLAUDE_CODE_OAUTH_TOKEN"
+        return 0
+    fi
 
-reset_time=""
-reset_remaining=""
+    local token=""
 
-# Check if ccusage is available
-if command -v ccusage >/dev/null 2>&1 || command -v npx >/dev/null 2>&1; then
-    now=$(date +%s)
-    cache_valid=0
-
-    # Check if cache exists and is fresh
-    if [ -f "$CCUSAGE_CACHE" ]; then
-        cache_mtime=$(stat -f %m "$CCUSAGE_CACHE" 2>/dev/null || stat -c %Y "$CCUSAGE_CACHE" 2>/dev/null)
-        cache_age=$((now - cache_mtime))
-        if [ "$cache_age" -lt "$CCUSAGE_CACHE_TTL" ]; then
-            cache_valid=1
+    # macOS Keychain
+    if command -v security >/dev/null 2>&1; then
+        local blob
+        blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+        if [ -n "$blob" ]; then
+            token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+            if [ -n "$token" ] && [ "$token" != "null" ]; then
+                echo "$token"
+                return 0
+            fi
         fi
     fi
 
-    # If cache is stale, trigger async update (non-blocking)
-    if [ "$cache_valid" -eq 0 ]; then
-        # Clean up stale lock (older than 2 minutes)
-        if [ -d "$CCUSAGE_LOCK" ]; then
-            lock_mtime=$(stat -f %m "$CCUSAGE_LOCK" 2>/dev/null || stat -c %Y "$CCUSAGE_LOCK" 2>/dev/null)
-            lock_age=$((now - lock_mtime))
-            [ "$lock_age" -gt 120 ] && rmdir "$CCUSAGE_LOCK" 2>/dev/null
-        fi
-        # Use lock to prevent multiple concurrent updates
-        if mkdir "$CCUSAGE_LOCK" 2>/dev/null; then
-            (
-                # Run ccusage in background
-                if command -v ccusage >/dev/null 2>&1; then
-                    ccusage blocks --json 2>/dev/null > "$CCUSAGE_CACHE.tmp" && mv "$CCUSAGE_CACHE.tmp" "$CCUSAGE_CACHE"
-                else
-                    npx -y ccusage@latest blocks --json 2>/dev/null > "$CCUSAGE_CACHE.tmp" && mv "$CCUSAGE_CACHE.tmp" "$CCUSAGE_CACHE"
-                fi
-                rmdir "$CCUSAGE_LOCK" 2>/dev/null
-            ) &
+    # Credentials file
+    local creds_file="${HOME}/.claude/.credentials.json"
+    if [ -f "$creds_file" ]; then
+        token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
+        if [ -n "$token" ] && [ "$token" != "null" ]; then
+            echo "$token"
+            return 0
         fi
     fi
 
-    # Read from cache (even if stale - better than nothing)
-    if [ -f "$CCUSAGE_CACHE" ]; then
-        active_block=$(jq -c '.blocks[] | select(.isActive == true)' "$CCUSAGE_CACHE" 2>/dev/null | head -n1)
-        if [ -n "$active_block" ]; then
-            end_time=$(echo "$active_block" | jq -r '.endTime // empty')
-            remaining_min=$(echo "$active_block" | jq -r '.projection.remainingMinutes // empty')
+    # Linux secret-tool
+    if command -v secret-tool >/dev/null 2>&1; then
+        local blob
+        blob=$(timeout 2 secret-tool lookup service "Claude Code-credentials" 2>/dev/null)
+        if [ -n "$blob" ]; then
+            token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+            if [ -n "$token" ] && [ "$token" != "null" ]; then
+                echo "$token"
+                return 0
+            fi
+        fi
+    fi
 
-            if [ -n "$end_time" ]; then
-                # Format reset time as HH:MM (local timezone)
-                if date -r 0 +%s >/dev/null 2>&1; then
-                    # BSD date (macOS) - convert ISO to epoch, then to local time
-                    end_epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%S" "${end_time%%.*}" +%s 2>/dev/null)
-                    # Only show reset_time if it's in the future
-                    if [ -n "$end_epoch" ] && [ "$end_epoch" -gt "$now" ]; then
-                        reset_time=$(date -r "$end_epoch" +"%H:%M" 2>/dev/null)
-                    fi
-                else
-                    # GNU date (Linux) - handles ISO format with timezone
-                    end_epoch=$(date -d "$end_time" +%s 2>/dev/null)
-                    if [ -n "$end_epoch" ] && [ "$end_epoch" -gt "$now" ]; then
-                        reset_time=$(date -d "$end_time" +"%H:%M" 2>/dev/null)
-                    fi
+    echo ""
+}
+
+# Fetch usage data with cache
+USAGE_CACHE="/tmp/claude/statusline-usage-cache.json"
+USAGE_CACHE_LOCK="/tmp/claude/statusline-usage.lock"
+USAGE_CACHE_TTL=60
+mkdir -p /tmp/claude
+
+usage_data=""
+needs_refresh=true
+
+if [ -f "$USAGE_CACHE" ]; then
+    cache_mtime=$(stat -f %m "$USAGE_CACHE" 2>/dev/null || stat -c %Y "$USAGE_CACHE" 2>/dev/null)
+    cache_now=$(date +%s)
+    cache_age=$(( cache_now - cache_mtime ))
+    if [ "$cache_age" -lt "$USAGE_CACHE_TTL" ]; then
+        needs_refresh=false
+    fi
+    usage_data=$(cat "$USAGE_CACHE" 2>/dev/null)
+fi
+
+if $needs_refresh; then
+    # Clean stale lock (>2min)
+    if [ -d "$USAGE_CACHE_LOCK" ]; then
+        lock_mtime=$(stat -f %m "$USAGE_CACHE_LOCK" 2>/dev/null || stat -c %Y "$USAGE_CACHE_LOCK" 2>/dev/null)
+        lock_age=$(( $(date +%s) - lock_mtime ))
+        [ "$lock_age" -gt 120 ] && rmdir "$USAGE_CACHE_LOCK" 2>/dev/null
+    fi
+
+    # Async fetch with lock
+    if mkdir "$USAGE_CACHE_LOCK" 2>/dev/null; then
+        (
+            token=$(get_oauth_token)
+            if [ -n "$token" ] && [ "$token" != "null" ]; then
+                response=$(curl -s --max-time 5 \
+                    -H "Accept: application/json" \
+                    -H "Content-Type: application/json" \
+                    -H "Authorization: Bearer $token" \
+                    -H "anthropic-beta: oauth-2025-04-20" \
+                    -H "User-Agent: claude-code/2.1.34" \
+                    "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
+                if [ -n "$response" ] && echo "$response" | jq -e '.five_hour' >/dev/null 2>&1; then
+                    echo "$response" > "$USAGE_CACHE"
                 fi
             fi
-
-            if [ -n "$remaining_min" ] && [ "$remaining_min" != "null" ]; then
-                remaining_min=${remaining_min%.*}  # Remove decimal
-                if [ "$remaining_min" -ge 60 ]; then
-                    reset_remaining="$((remaining_min / 60))h $((remaining_min % 60))m"
-                else
-                    reset_remaining="${remaining_min}m"
-                fi
-            fi
-        fi
+            rmdir "$USAGE_CACHE_LOCK" 2>/dev/null
+        ) &
     fi
+fi
+
+# Parse usage data into line prefixes
+five_hour_prefix=""
+seven_day_prefix=""
+usage_bar_width=10
+
+if [ -n "$usage_data" ] && echo "$usage_data" | jq -e . >/dev/null 2>&1; then
+    # 5-hour usage
+    five_pct=$(echo "$usage_data" | jq -r '.five_hour.utilization // 0' | awk '{printf "%.0f", $1}')
+    five_reset_iso=$(echo "$usage_data" | jq -r '.five_hour.resets_at // empty')
+    five_reset=$(format_reset_time "$five_reset_iso" "time")
+    five_bar=$(usage_bar "$five_pct" "$usage_bar_width")
+    five_color=$(usage_color "$five_pct")
+    five_pct_fmt=$(printf "%3d" "$five_pct")
+
+    five_hour_prefix="\033[97mc:\033[0m ${five_bar} ${five_color}${five_pct_fmt}%\033[0m"
+    [ -n "$five_reset" ] && five_hour_prefix+=" \033[2m⟳\033[0m \033[97m${five_reset}\033[0m"
+
+    # 7-day usage
+    week_pct=$(echo "$usage_data" | jq -r '.seven_day.utilization // 0' | awk '{printf "%.0f", $1}')
+    week_reset_iso=$(echo "$usage_data" | jq -r '.seven_day.resets_at // empty')
+    week_reset=$(format_reset_time "$week_reset_iso" "datetime")
+    week_bar=$(usage_bar "$week_pct" "$usage_bar_width")
+    week_color=$(usage_color "$week_pct")
+    week_pct_fmt=$(printf "%3d" "$week_pct")
+
+    seven_day_prefix="\033[97mw:\033[0m ${week_bar} ${week_color}${week_pct_fmt}%\033[0m"
+    [ -n "$week_reset" ] && seven_day_prefix+=" \033[2m⟳\033[0m \033[97m${week_reset}\033[0m"
 fi
 
 # ============================================================================
@@ -188,7 +308,7 @@ fi
 
 # Path
 short_path=$(format_path "$current_dir")
-line1="📁 $short_path"
+line1="🤖 $model | 📁 $short_path"
 
 # Node.js version
 if command -v node >/dev/null 2>&1; then
@@ -279,13 +399,10 @@ if [ -d "$project_dir/.obsidian" ]; then
 fi
 
 # ============================================================================
-# LINE 2: Session - model, session_id, claude lines
+# LINE 2: 5h usage | Session - model, session_id, claude lines
 # ============================================================================
 
 line2_parts=()
-
-# Model
-line2_parts+=("🤖 $model")
 
 # Session ID (full)
 if [ -n "$session_id" ]; then
@@ -297,7 +414,7 @@ if [ "$lines_added" -gt 0 ] || [ "$lines_removed" -gt 0 ]; then
     claude_lines=""
     [ "$lines_added" -gt 0 ] && claude_lines="\033[32m+${lines_added}\033[0m"
     [ "$lines_removed" -gt 0 ] && claude_lines="${claude_lines} \033[31m-${lines_removed}\033[0m"
-    line2_parts+=("📝 $(printf '%b' "$claude_lines")")
+    # line2_parts+=("📝 $(printf '%b' "$claude_lines")")
 fi
 
 # Join line2 parts
@@ -310,8 +427,17 @@ for i in "${!line2_parts[@]}"; do
     fi
 done
 
+# Prepend 5h usage graph
+if [ -n "$five_hour_prefix" ]; then
+    if [ -n "$line2" ]; then
+        line2="${five_hour_prefix} | ${line2}"
+    else
+        line2="${five_hour_prefix}"
+    fi
+fi
+
 # ============================================================================
-# LINE 3: Metrics - context, cost, time
+# LINE 3: weekly usage | Metrics - context, cost, time
 # ============================================================================
 
 line3_parts=()
@@ -330,7 +456,6 @@ if [ "$used_pct" -gt 0 ]; then
         tokens_fmt=$ctx_tokens
     fi
 
-    # Use same color for percentage as progress bar
     line3_parts+=("🧠 ${bar_color}${used_pct}%\033[0m $(printf '%b' "$bar") ${bar_color}${tokens_fmt}\033[0m")
 fi
 
@@ -344,25 +469,17 @@ duration_sec=$((duration_ms / 1000))
 if [ "$duration_sec" -gt 0 ]; then
     time_total=$(format_duration "$duration_ms")
     time_api=$(format_duration "$api_duration_ms")
-    line3_parts+=("⏱ ${time_total} (${time_api} api)")
+    # line3_parts+=("⏱ ${time_total} (${time_api} api)")
 fi
 
 # TPM (tokens per minute)
 if [ -n "$tpm" ] && [ "$tpm" -gt 0 ] 2>/dev/null; then
-    # Format: 28000 -> 28k tpm
     if [ "$tpm" -ge 1000 ]; then
         tpm_fmt=$(echo "scale=1; $tpm / 1000" | bc)k
     else
         tpm_fmt=$tpm
     fi
-    line3_parts+=("📊 ${tpm_fmt} tpm")
-fi
-
-# Reset time (from ccusage cache)
-if [ -n "$reset_remaining" ] && [ -n "$reset_time" ]; then
-    line3_parts+=("⏳ ${reset_remaining} → ${reset_time}")
-elif [ -n "$reset_remaining" ]; then
-    line3_parts+=("⏳ ${reset_remaining}")
+    # line3_parts+=("📊 ${tpm_fmt} tpm")
 fi
 
 # Join line3 parts
@@ -374,6 +491,15 @@ for i in "${!line3_parts[@]}"; do
         line3="$line3 | ${line3_parts[$i]}"
     fi
 done
+
+# Prepend weekly usage graph
+if [ -n "$seven_day_prefix" ]; then
+    if [ -n "$line3" ]; then
+        line3="${seven_day_prefix} | ${line3}"
+    else
+        line3="${seven_day_prefix}"
+    fi
+fi
 
 # ============================================================================
 # OUTPUT
