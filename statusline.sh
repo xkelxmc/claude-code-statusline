@@ -53,7 +53,7 @@ format_path() {
     local path_with_home=$(echo "$dir" | sed "s|^$HOME|~|")
     local parent=$(dirname "$path_with_home")
     local current=$(basename "$path_with_home")
-    echo "\033[90m${parent}/\033[0m\033[97m${current}\033[0m"
+    echo "\033[90m${parent}/\033[0m${path_highlight_color}${current}\033[0m"
 }
 
 # Format duration: ms -> "5m" or "45s"
@@ -96,13 +96,14 @@ progress_bar() {
     echo "$bar"
 }
 
-# Usage color by percentage (green -> orange -> yellow -> red)
+# Usage color by percentage (gray -> green -> orange -> yellow -> red)
 usage_color() {
     local pct=$1
     if [ "$pct" -ge 90 ]; then echo "\033[38;2;255;85;85m"
     elif [ "$pct" -ge 70 ]; then echo "\033[38;2;230;200;0m"
     elif [ "$pct" -ge 50 ]; then echo "\033[38;2;255;176;85m"
-    else echo "\033[38;2;0;175;80m"
+    elif [ "$pct" -ge 25 ]; then echo "\033[38;2;120;220;120m"
+    else echo "\033[90m"
     fi
 }
 
@@ -173,6 +174,83 @@ format_reset_time() {
             ;;
     esac
 }
+
+# ============================================================================
+# BADGE CONFIG (~/.claude/statusline-config.json)
+# ============================================================================
+#
+# Border styles: double (╔═╗), round (╭─╮), heavy (┏━┓), light (┌─┐), ascii (+-+)
+# Color: hex (#rrggbb)
+#
+# Example config:
+# {
+#   "badges": [
+#     { "pathPattern": "~/repos/me/*", "label": "ME", "color": "#77dd77", "border": "round" },
+#     { "pathPattern": "~/repos/work/*", "label": "WORK", "color": "#b388ff", "border": "double" }
+#   ]
+# }
+
+BADGE_CONFIG="${HOME}/.claude/statusline-config.json"
+badge_line1=""
+badge_line2=""
+badge_line3=""
+path_highlight_color="\033[97m"  # default: white
+
+hex_to_ansi() {
+    local hex="${1#\#}"
+    local r g b
+    r=$(printf '%d' "0x${hex:0:2}")
+    g=$(printf '%d' "0x${hex:2:2}")
+    b=$(printf '%d' "0x${hex:4:2}")
+    echo "\033[38;2;${r};${g};${b}m"
+}
+
+if [ -f "$BADGE_CONFIG" ]; then
+    badge_count=$(jq -r '.badges | length' "$BADGE_CONFIG" 2>/dev/null)
+    for ((idx=0; idx<badge_count; idx++)); do
+        pattern=$(jq -r ".badges[$idx].pathPattern" "$BADGE_CONFIG" 2>/dev/null)
+        # Expand ~ to $HOME
+        pattern="${pattern/#\~/$HOME}"
+
+        # Bash glob matching (* matches any chars including /)
+        if [[ "$project_dir" == $pattern ]]; then
+            badge_label=$(jq -r ".badges[$idx].label // \"\"" "$BADGE_CONFIG")
+            badge_color_hex=$(jq -r ".badges[$idx].color // \"#ffffff\"" "$BADGE_CONFIG")
+            badge_path_color_hex=$(jq -r ".badges[$idx].pathColor // empty" "$BADGE_CONFIG")
+            badge_border=$(jq -r ".badges[$idx].border // \"double\"" "$BADGE_CONFIG")
+            break
+        fi
+    done
+
+    if [ -n "$badge_label" ]; then
+        badge_ansi=$(hex_to_ansi "$badge_color_hex")
+        rst="\033[0m"
+
+        if [ -n "$badge_path_color_hex" ]; then
+            path_highlight_color=$(hex_to_ansi "$badge_path_color_hex")
+        else
+            path_highlight_color="$badge_ansi"
+        fi
+
+        label_len=${#badge_label}
+        inner_width=$((label_len + 2))
+
+        case "$badge_border" in
+            round)  tl="╭" tr="╮" bl="╰" br="╯" bh="─" bv="│" ;;
+            heavy)  tl="┏" tr="┓" bl="┗" br="┛" bh="━" bv="┃" ;;
+            light)  tl="┌" tr="┐" bl="└" br="┘" bh="─" bv="│" ;;
+            ascii)  tl="+" tr="+" bl="+" br="+" bh="-" bv="|" ;;
+            *)      tl="╔" tr="╗" bl="╚" br="╝" bh="═" bv="║" ;;
+        esac
+
+        h_line=""
+        for ((i=0; i<inner_width; i++)); do h_line+="$bh"; done
+
+        badge_line1="${badge_ansi}${tl}${h_line}${tr}${rst} "
+        badge_line2="${badge_ansi}${bv} ${badge_label} ${bv}${rst} "
+        badge_line3="${badge_ansi}${bl}${h_line}${br}${rst} "
+    fi
+fi
 
 # ============================================================================
 # OAUTH TOKEN & USAGE API (cached)
@@ -505,6 +583,13 @@ fi
 # OUTPUT
 # ============================================================================
 
-printf '%b\n' "$line1"
-[ -n "$line2" ] && printf '%b\n' "$line2"
-[ -n "$line3" ] && printf '%b\n' "$line3"
+if [ -n "$badge_line1" ]; then
+    # Badge present: always show 3 lines for complete frame
+    printf '%b\n' "${badge_line1}${line1}"
+    printf '%b\n' "${badge_line2}${line2}"
+    printf '%b\n' "${badge_line3}${line3}"
+else
+    printf '%b\n' "$line1"
+    [ -n "$line2" ] && printf '%b\n' "$line2"
+    [ -n "$line3" ] && printf '%b\n' "$line3"
+fi

@@ -5,44 +5,94 @@ A 3-line bash status line for Claude Code with dynamic sections — if there's n
 ## Layout
 
 ```
-Line 1: 📁 ~/repos/project | ⬢ v22.0.0 | 📦 bun | ✓ main | 📔 42 notes
-Line 2: 🤖 Opus 4.5 | 🔑 7a020cd0-edd7-4094-9e6c-0b2a5a233beb | 📝 +45 -12
-Line 3: 🧠 36% ▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ 72.4k | 💰 $1.20 | ⏱ 12m (4m api) | 📊 25k tpm | ⏳ 2h 15m → 01:00
+╭──────╮ 🤖 Opus 4.6 | 📁 ~/repos/personal/my-app | ⬢ v22.0.0 | 📦 bun | ✓ main
+│ HOME │ c: ●●○○○○○○○○ 18% ⟳ 15:00 | 🔑 7a020cd0-edd7-4094-9e6c-0b2a5a233beb
+╰──────╯ w: ●●●○○○○○○○ 34% ⟳ mar 13, 15:00 | 🧠 36% ▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ 72.4k | 💰 $1.20
 ```
 
 ### Line 1: Environment
 | Section | Description |
 |---------|-------------|
-| 📁 Path | Current directory (gray parent / white current) |
+| 🤖 Model | Current model (Opus 4.6, Sonnet, etc.) |
+| 📁 Path | Current directory (gray parent / colored current) |
 | ⬢ Node | Node.js version |
 | 📦 Package | Package manager (npm/yarn/pnpm/bun) |
 | ✓/✗ Git | Branch, file count, insertions/deletions |
 | 📔 Notes | Note count (Obsidian vaults only) |
 
-### Line 2: Session
+### Line 2: 5-Hour Usage & Session
 | Section | Description |
 |---------|-------------|
-| 🤖 Model | Current model (Opus 4.5, Sonnet, etc.) |
+| c: ●●○○○○○○○○ | 5-hour usage bar with % and reset time |
 | 🔑 Session | Full session ID |
-| 📝 Lines | Lines added/removed by Claude this session |
 
-### Line 3: Metrics
+### Line 3: Weekly Usage & Metrics
 | Section | Description |
 |---------|-------------|
+| w: ●●●○○○○○○○ | 7-day usage bar with % and reset time |
 | 🧠 Context | Usage %, colored progress bar, token count |
 | 💰 Cost | Session cost in USD |
-| ⏱ Time | Total duration (API time) |
-| 📊 TPM | Tokens per minute (session average) |
-| ⏳ Reset | Time until subscription reset (via ccusage) |
 
 ## Features
 
+- **Project badges** — configurable colored badges per directory pattern (see below)
+- **OAuth usage graphs** — 5-hour and 7-day usage bars fetched from Anthropic API
 - **Colored progress bar** for context usage (gray → white → yellow → orange → red)
+- **Usage color scale** — gray (<25%) → green (25-49%) → orange (50-69%) → yellow (70-89%) → red (90%+)
 - **Git uses `project_dir`** — works correctly when navigating subdirectories
-- **API time tracking** — shows both total and pure API duration
-- **Claude's contributions** — tracks lines added/removed by Claude
-- **TPM (tokens per minute)** — calculated from session data
-- **Subscription reset countdown** — async integration with ccusage (non-blocking, cached)
+- **Path highlighting** — current directory name colored per badge config
+- **Async API fetch** — OAuth usage is fetched in background with 60s cache, never blocks the status line
+
+## Badges
+
+Badges are colored labels shown on the left side of the status line, configured per directory pattern.
+
+### Configuration
+
+Create `~/.claude/statusline-config.json`:
+
+```json
+{
+  "badges": [
+    {
+      "pathPattern": "~/repos/personal/*",
+      "label": "HOME",
+      "color": "#77dd77",
+      "pathColor": "#77dd77",
+      "border": "round"
+    },
+    {
+      "pathPattern": "~/repos/work/*",
+      "label": "WORK",
+      "color": "#b388ff",
+      "pathColor": "#b388ff",
+      "border": "double"
+    }
+  ]
+}
+```
+
+### Badge Fields
+
+| Field | Description |
+|-------|-------------|
+| `pathPattern` | Glob pattern to match `project_dir` (`~` expands to `$HOME`, `*` matches any path) |
+| `label` | Text inside the badge (e.g. `ME`, `WORK`, `URNM`) |
+| `color` | Badge frame color as hex (`#rrggbb`) |
+| `pathColor` | Directory name highlight color as hex (defaults to `color` if omitted) |
+| `border` | Border style (see below) |
+
+### Border Styles
+
+| Style | Example |
+|-------|---------|
+| `double` | `╔════╗` `║ ME ║` `╚════╝` |
+| `round` | `╭────╮` `│ ME │` `╰────╯` |
+| `heavy` | `┏━━━━┓` `┃ ME ┃` `┗━━━━┛` |
+| `light` | `┌────┐` `│ ME │` `└────┘` |
+| `ascii` | `+----+` `| ME |` `+----+` |
+
+First matching badge wins, so order matters.
 
 ## Installation
 
@@ -61,6 +111,7 @@ Line 3: 🧠 36% ▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱ 72
    }
    ```
 4. Restart Claude Code
+5. (Optional) Create `~/.claude/statusline-config.json` for badges
 
 ## Configuration
 
@@ -72,11 +123,22 @@ export CLAUDE_STATUSLINE_HIDE_COST=1
 
 Add to `~/.bashrc` or `~/.zshrc`, then restart terminal.
 
+### OAuth Usage
+
+The 5-hour and 7-day usage graphs are fetched automatically via the Anthropic OAuth API. Token is resolved from (in order):
+
+1. `CLAUDE_CODE_OAUTH_TOKEN` environment variable
+2. macOS Keychain (`Claude Code-credentials`)
+3. `~/.claude/.credentials.json`
+4. Linux `secret-tool`
+
+Usage data is cached in `/tmp/claude/` for 60 seconds and fetched asynchronously to avoid blocking.
+
 ## Dependencies
 
 - `jq` — for JSON parsing (`brew install jq` or `apt install jq`)
 - `bc` — for calculations (usually pre-installed)
-- `ccusage` (optional) — for reset time tracking (`npm install -g ccusage` or auto-fetched via `npx`)
+- `curl` — for OAuth usage API (usually pre-installed)
 
 ## License
 
