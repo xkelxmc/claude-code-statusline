@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Claude Code Custom Status Line (v2 - 3 lines)
-# https://github.com/anthropics/claude-code
+# Author: Ilya Zhidkov
+# https://github.com/xkelxmc/claude-code-statusline
 
 set -f
 input=$(cat)
@@ -306,7 +307,7 @@ get_oauth_token() {
 # Fetch usage data with cache
 USAGE_CACHE="/tmp/claude/statusline-usage-cache.json"
 USAGE_CACHE_LOCK="/tmp/claude/statusline-usage.lock"
-USAGE_CACHE_TTL=60
+USAGE_CACHE_TTL=300
 mkdir -p /tmp/claude
 
 usage_data=""
