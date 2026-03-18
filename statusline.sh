@@ -409,6 +409,8 @@ fi
 [ -n "$pkg_manager" ] && line1="$line1 | 📦 $pkg_manager"
 
 # Git info (based on project_dir, not current_dir!)
+# Prevent git from creating .git/index.lock (avoids conflicts with concurrent git operations)
+export GIT_OPTIONAL_LOCKS=0
 if [ -d "$project_dir/.git" ] && cd "$project_dir" 2>/dev/null; then
     git_branch=$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null)
 
