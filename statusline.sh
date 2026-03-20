@@ -13,6 +13,7 @@ input=$(cat)
 
 # Basic info
 session_id=$(echo "$input" | jq -r '.session_id // ""')
+cc_version=$(echo "$input" | jq -r '.version // "0.0.0"')
 model=$(echo "$input" | jq -r '.model.display_name // .model.id // "unknown"')
 project_dir=$(echo "$input" | jq -r '.workspace.project_dir // .workspace.current_dir')
 current_dir=$(echo "$input" | jq -r '.workspace.current_dir')
@@ -254,125 +255,178 @@ if [ -f "$BADGE_CONFIG" ]; then
 fi
 
 # ============================================================================
-# OAUTH TOKEN & USAGE API (cached)
+# USAGE DATA (rate limits)
 # ============================================================================
+# v2.1.80+ provides rate_limits natively in the input JSON (unix timestamps).
+# Older versions fall back to OAuth API with caching.
 
-get_oauth_token() {
-    if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-        echo "$CLAUDE_CODE_OAUTH_TOKEN"
-        return 0
-    fi
-
-    local token=""
-
-    # macOS Keychain
-    if command -v security >/dev/null 2>&1; then
-        local blob
-        blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
-        if [ -n "$blob" ]; then
-            token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
-            if [ -n "$token" ] && [ "$token" != "null" ]; then
-                echo "$token"
-                return 0
-            fi
-        fi
-    fi
-
-    # Credentials file
-    local creds_file="${HOME}/.claude/.credentials.json"
-    if [ -f "$creds_file" ]; then
-        token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
-        if [ -n "$token" ] && [ "$token" != "null" ]; then
-            echo "$token"
-            return 0
-        fi
-    fi
-
-    # Linux secret-tool
-    if command -v secret-tool >/dev/null 2>&1; then
-        local blob
-        blob=$(timeout 2 secret-tool lookup service "Claude Code-credentials" 2>/dev/null)
-        if [ -n "$blob" ]; then
-            token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
-            if [ -n "$token" ] && [ "$token" != "null" ]; then
-                echo "$token"
-                return 0
-            fi
-        fi
-    fi
-
-    echo ""
+# Compare semver: returns 0 if $1 >= $2
+version_gte() {
+    local IFS=.
+    local i v1=($1) v2=($2)
+    for ((i=0; i<3; i++)); do
+        local a=${v1[i]:-0} b=${v2[i]:-0}
+        [ "$a" -gt "$b" ] 2>/dev/null && return 0
+        [ "$a" -lt "$b" ] 2>/dev/null && return 1
+    done
+    return 0
 }
 
-# Fetch usage data with cache
-USAGE_CACHE="/tmp/claude/statusline-usage-cache.json"
-USAGE_CACHE_LOCK="/tmp/claude/statusline-usage.lock"
-USAGE_CACHE_TTL=300
-mkdir -p /tmp/claude
+# Format unix epoch to time/datetime
+format_epoch() {
+    local epoch="$1"
+    local style="$2"
+    [ -z "$epoch" ] || [ "$epoch" = "null" ] || [ "$epoch" = "0" ] && return
 
-usage_data=""
-needs_refresh=true
+    case "$style" in
+        time)
+            date -j -r "$epoch" +"%H:%M" 2>/dev/null || \
+            date -d "@$epoch" +"%H:%M" 2>/dev/null
+            ;;
+        datetime)
+            date -j -r "$epoch" +"%b %-d, %H:%M" 2>/dev/null | sed 's/  / /g' | tr '[:upper:]' '[:lower:]' || \
+            date -d "@$epoch" +"%b %-d, %H:%M" 2>/dev/null | tr '[:upper:]' '[:lower:]'
+            ;;
+    esac
+}
 
-if [ -f "$USAGE_CACHE" ]; then
-    cache_mtime=$(stat -f %m "$USAGE_CACHE" 2>/dev/null || stat -c %Y "$USAGE_CACHE" 2>/dev/null)
-    cache_now=$(date +%s)
-    cache_age=$(( cache_now - cache_mtime ))
-    if [ "$cache_age" -lt "$USAGE_CACHE_TTL" ]; then
-        needs_refresh=false
-    fi
-    usage_data=$(cat "$USAGE_CACHE" 2>/dev/null)
-fi
-
-if $needs_refresh; then
-    # Clean stale lock (>2min)
-    if [ -d "$USAGE_CACHE_LOCK" ]; then
-        lock_mtime=$(stat -f %m "$USAGE_CACHE_LOCK" 2>/dev/null || stat -c %Y "$USAGE_CACHE_LOCK" 2>/dev/null)
-        lock_age=$(( $(date +%s) - lock_mtime ))
-        [ "$lock_age" -gt 120 ] && rmdir "$USAGE_CACHE_LOCK" 2>/dev/null
-    fi
-
-    # Async fetch with lock
-    if mkdir "$USAGE_CACHE_LOCK" 2>/dev/null; then
-        (
-            token=$(get_oauth_token)
-            if [ -n "$token" ] && [ "$token" != "null" ]; then
-                response=$(curl -s --max-time 5 \
-                    -H "Accept: application/json" \
-                    -H "Content-Type: application/json" \
-                    -H "Authorization: Bearer $token" \
-                    -H "anthropic-beta: oauth-2025-04-20" \
-                    -H "User-Agent: claude-code/2.1.34" \
-                    "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
-                if [ -n "$response" ] && echo "$response" | jq -e '.five_hour' >/dev/null 2>&1; then
-                    echo "$response" > "$USAGE_CACHE"
-                fi
-            fi
-            rmdir "$USAGE_CACHE_LOCK" 2>/dev/null
-        ) &
-    fi
-fi
-
-# Parse usage data into line prefixes
 five_hour_prefix=""
 seven_day_prefix=""
 usage_bar_width=10
 
-if [ -n "$usage_data" ] && echo "$usage_data" | jq -e . >/dev/null 2>&1; then
-    # 5-hour usage
-    five_pct=$(echo "$usage_data" | jq -r '.five_hour.utilization // 0' | awk '{printf "%.0f", $1}')
-    five_reset_iso=$(echo "$usage_data" | jq -r '.five_hour.resets_at // empty')
-    five_reset=$(format_reset_time "$five_reset_iso" "time")
+five_pct=""
+five_reset=""
+week_pct=""
+week_reset=""
+
+if version_gte "$cc_version" "2.1.80"; then
+    # ---- Native rate_limits (v2.1.80+) ----
+    has_rate_limits=$(echo "$input" | jq -e '.rate_limits.five_hour' >/dev/null 2>&1 && echo "yes")
+    if [ "$has_rate_limits" = "yes" ]; then
+        five_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // 0' | awk '{printf "%.0f", $1}')
+        five_reset_epoch=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // 0')
+        five_reset=$(format_epoch "$five_reset_epoch" "time")
+
+        week_pct=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // 0' | awk '{printf "%.0f", $1}')
+        week_reset_epoch=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // 0')
+        week_reset=$(format_epoch "$week_reset_epoch" "datetime")
+    fi
+else
+    # ---- Legacy: OAuth API with cache (< v2.1.80) ----
+    get_oauth_token() {
+        if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "$CLAUDE_CODE_OAUTH_TOKEN"
+            return 0
+        fi
+
+        local token=""
+
+        # macOS Keychain
+        if command -v security >/dev/null 2>&1; then
+            local blob
+            blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+            if [ -n "$blob" ]; then
+                token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+                if [ -n "$token" ] && [ "$token" != "null" ]; then
+                    echo "$token"
+                    return 0
+                fi
+            fi
+        fi
+
+        # Credentials file
+        local creds_file="${HOME}/.claude/.credentials.json"
+        if [ -f "$creds_file" ]; then
+            token=$(jq -r '.claudeAiOauth.accessToken // empty' "$creds_file" 2>/dev/null)
+            if [ -n "$token" ] && [ "$token" != "null" ]; then
+                echo "$token"
+                return 0
+            fi
+        fi
+
+        # Linux secret-tool
+        if command -v secret-tool >/dev/null 2>&1; then
+            local blob
+            blob=$(timeout 2 secret-tool lookup service "Claude Code-credentials" 2>/dev/null)
+            if [ -n "$blob" ]; then
+                token=$(echo "$blob" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+                if [ -n "$token" ] && [ "$token" != "null" ]; then
+                    echo "$token"
+                    return 0
+                fi
+            fi
+        fi
+
+        echo ""
+    }
+
+    USAGE_CACHE="/tmp/claude/statusline-usage-cache.json"
+    USAGE_CACHE_LOCK="/tmp/claude/statusline-usage.lock"
+    USAGE_CACHE_TTL=300
+    mkdir -p /tmp/claude
+
+    usage_data=""
+    needs_refresh=true
+
+    if [ -f "$USAGE_CACHE" ]; then
+        cache_mtime=$(stat -f %m "$USAGE_CACHE" 2>/dev/null || stat -c %Y "$USAGE_CACHE" 2>/dev/null)
+        cache_now=$(date +%s)
+        cache_age=$(( cache_now - cache_mtime ))
+        if [ "$cache_age" -lt "$USAGE_CACHE_TTL" ]; then
+            needs_refresh=false
+        fi
+        usage_data=$(cat "$USAGE_CACHE" 2>/dev/null)
+    fi
+
+    if $needs_refresh; then
+        if [ -d "$USAGE_CACHE_LOCK" ]; then
+            lock_mtime=$(stat -f %m "$USAGE_CACHE_LOCK" 2>/dev/null || stat -c %Y "$USAGE_CACHE_LOCK" 2>/dev/null)
+            lock_age=$(( $(date +%s) - lock_mtime ))
+            [ "$lock_age" -gt 120 ] && rmdir "$USAGE_CACHE_LOCK" 2>/dev/null
+        fi
+
+        if mkdir "$USAGE_CACHE_LOCK" 2>/dev/null; then
+            (
+                token=$(get_oauth_token)
+                if [ -n "$token" ] && [ "$token" != "null" ]; then
+                    response=$(curl -s --max-time 5 \
+                        -H "Accept: application/json" \
+                        -H "Content-Type: application/json" \
+                        -H "Authorization: Bearer $token" \
+                        -H "anthropic-beta: oauth-2025-04-20" \
+                        -H "User-Agent: claude-code/2.1.34" \
+                        "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
+                    if [ -n "$response" ] && echo "$response" | jq -e '.five_hour' >/dev/null 2>&1; then
+                        echo "$response" > "$USAGE_CACHE"
+                    fi
+                fi
+                rmdir "$USAGE_CACHE_LOCK" 2>/dev/null
+            ) &
+        fi
+    fi
+
+    if [ -n "$usage_data" ] && echo "$usage_data" | jq -e . >/dev/null 2>&1; then
+        five_pct=$(echo "$usage_data" | jq -r '.five_hour.utilization // 0' | awk '{printf "%.0f", $1}')
+        five_reset_iso=$(echo "$usage_data" | jq -r '.five_hour.resets_at // empty')
+        five_reset=$(format_reset_time "$five_reset_iso" "time")
+
+        week_pct=$(echo "$usage_data" | jq -r '.seven_day.utilization // 0' | awk '{printf "%.0f", $1}')
+        week_reset_iso=$(echo "$usage_data" | jq -r '.seven_day.resets_at // empty')
+        week_reset=$(format_reset_time "$week_reset_iso" "datetime")
+    fi
+fi
+
+# Build usage prefixes
+if [ -n "$five_pct" ] && [ "$five_pct" != "" ]; then
     five_bar=$(usage_bar "$five_pct" "$usage_bar_width")
     five_color=$(usage_color "$five_pct")
     five_pct_fmt=$(printf "%3d" "$five_pct")
 
     five_hour_prefix="\033[97mc:\033[0m ${five_bar} ${five_color}${five_pct_fmt}%\033[0m"
     [ -n "$five_reset" ] && five_hour_prefix+=" \033[2m⟳\033[0m \033[97m${five_reset}\033[0m"
+fi
 
-    # 7-day usage
-    week_pct=$(echo "$usage_data" | jq -r '.seven_day.utilization // 0' | awk '{printf "%.0f", $1}')
-    week_reset_iso=$(echo "$usage_data" | jq -r '.seven_day.resets_at // empty')
-    week_reset=$(format_reset_time "$week_reset_iso" "datetime")
+if [ -n "$week_pct" ] && [ "$week_pct" != "" ]; then
     week_bar=$(usage_bar "$week_pct" "$usage_bar_width")
     week_color=$(usage_color "$week_pct")
     week_pct_fmt=$(printf "%3d" "$week_pct")

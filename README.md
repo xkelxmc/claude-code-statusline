@@ -36,12 +36,12 @@ A 3-line bash status line for Claude Code with dynamic sections — if there's n
 ## Features
 
 - **Project badges** — configurable colored badges per directory pattern (see below)
-- **OAuth usage graphs** — 5-hour and 7-day usage bars fetched from Anthropic API
+- **Native rate limits** — 5-hour and 7-day usage bars from Claude Code's built-in `rate_limits` (v2.1.80+), with automatic fallback to OAuth API for older versions
 - **Colored progress bar** for context usage (gray → white → yellow → orange → red)
 - **Usage color scale** — gray (<25%) → green (25-49%) → orange (50-69%) → yellow (70-89%) → red (90%+)
 - **Git uses `project_dir`** — works correctly when navigating subdirectories
 - **Path highlighting** — current directory name colored per badge config
-- **Async API fetch** — OAuth usage is fetched in background with 60s cache, never blocks the status line
+- **Async API fallback** — for Claude Code < 2.1.80, OAuth usage is fetched in background with 5min cache
 
 ## Badges
 
@@ -123,22 +123,24 @@ export CLAUDE_STATUSLINE_HIDE_COST=1
 
 Add to `~/.bashrc` or `~/.zshrc`, then restart terminal.
 
-### OAuth Usage
+### Usage Data
 
-The 5-hour and 7-day usage graphs are fetched automatically via the Anthropic OAuth API. Token is resolved from (in order):
+**Claude Code v2.1.80+**: Usage data (5-hour and 7-day rate limits) is provided natively via the `rate_limits` field in the statusline input — no API calls, no tokens, no cache needed.
+
+**Claude Code < v2.1.80** (legacy fallback): Usage is fetched from the Anthropic OAuth API. Token is resolved from (in order):
 
 1. `CLAUDE_CODE_OAUTH_TOKEN` environment variable
 2. macOS Keychain (`Claude Code-credentials`)
 3. `~/.claude/.credentials.json`
 4. Linux `secret-tool`
 
-Usage data is cached in `/tmp/claude/` for 60 seconds and fetched asynchronously to avoid blocking.
+Usage data is cached in `/tmp/claude/` for 5 minutes and fetched asynchronously to avoid blocking.
 
 ## Dependencies
 
 - `jq` — for JSON parsing (`brew install jq` or `apt install jq`)
 - `bc` — for calculations (usually pre-installed)
-- `curl` — for OAuth usage API (usually pre-installed)
+- `curl` — for OAuth usage API on Claude Code < 2.1.80 (usually pre-installed)
 
 ## License
 
